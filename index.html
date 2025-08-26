@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Pro WebSocket Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root {
+            --primary-color: #007bff;
+            --light-grey: #f4f4f8;
+            --border-color: #ddd;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            background-color: var(--light-grey);
+        }
+        #sidebar {
+            width: 240px;
+            background-color: #fff;
+            border-right: 1px solid var(--border-color);
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+        }
+        #sidebar h3 {
+            margin-top: 0;
+            color: var(--primary-color);
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 10px;
+        }
+        #user-list {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+            flex-grow: 1;
+        }
+        #user-list li {
+            padding: 10px 5px;
+            border-bottom: 1px solid #eee;
+            color: #333;
+        }
+        #user-list li::before {
+            content: '🟢';
+            margin-right: 10px;
+            font-size: 0.7em;
+        }
+        #main-chat {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: #e5ddd5;
+        }
+        #messages {
+            list-style-type: none;
+            margin: 0;
+            padding: 20px;
+            overflow-y: scroll;
+            flex-grow: 1;
+        }
+        #messages li {
+            padding: 8px 12px;
+            margin-bottom: 10px;
+            max-width: 70%;
+            border-radius: 15px;
+            word-wrap: break-word;
+        }
+        .message-item.mine {
+            background: #dcf8c6;
+            align-self: flex-end;
+            border-bottom-right-radius: 3px;
+        }
+        .message-item.other {
+            background: #fff;
+            align-self: flex-start;
+            border-bottom-left-radius: 3px;
+        }
+        .message-sender {
+            font-weight: bold;
+            font-size: 0.9em;
+            color: var(--primary-color);
+            margin-bottom: 4px;
+        }
+        .announcement {
+            text-align: center;
+            font-style: italic;
+            color: #888;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        #form {
+            background: #f0f0f0;
+            padding: 15px;
+            display: flex;
+        }
+        #input {
+            border: 1px solid var(--border-color);
+            padding: 10px;
+            flex-grow: 1;
+            border-radius: 20px;
+            margin-right: 10px;
+        }
+        #form > button {
+            background: var(--primary-color);
+            border: none;
+            padding: 10px 20px;
+            color: #fff;
+            border-radius: 20px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h3>👥 Online Users</h3>
+        <ul id="user-list"></ul>
+    </div>
+
+    <div id="main-chat">
+        <ul id="messages"></ul>
+        <form id="form">
+            <input id="input" autocomplete="off" placeholder="Nhập tin nhắn..." required />
+            <button>Gửi</button>
+        </form>
+    </div>
+
+    <script>
+        const userList = document.getElementById('user-list');
+        const messages = document.getElementById('messages');
+        const form = document.getElementById('form');
+        const input = document.getElementById('input');
+        
+        let username = '';
+        
+        // Vòng lặp để đảm bảo người dùng nhập tên
+        while (!username || username.trim() === '') {
+            username = prompt("Vui lòng nhập tên của bạn:");
+            if (username === null) { // Người dùng nhấn cancel
+                document.body.innerHTML = '<h1>Bạn đã hủy tham gia. Vui lòng tải lại trang để thử lại.</h1>';
+                throw new Error("User cancelled login.");
+            }
+        }
+
+        // Tự động xác định địa chỉ WebSocket server
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socketUrl = `${wsProtocol}//${window.location.host}`;
+        const socket = new WebSocket(socketUrl);
+
+console.log(`Đang kết nối đến: ${socketUrl}`);
+
+        // Gửi tin nhắn đăng nhập ngay khi kết nối được mở
+        socket.onopen = function(e) {
+            console.log("✅ Kết nối WebSocket đã mở, đang gửi thông tin đăng nhập...");
+            const loginPayload = {
+                type: "login",
+                username: username
+            };
+            socket.send(JSON.stringify(loginPayload));
+        };
+
+        // Xử lý các loại tin nhắn khác nhau từ server
+        socket.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            
+            switch (data.type) {
+                case "user_list":
+                    updateUserList(data.users);
+                    break;
+                case "announcement":
+                    displayAnnouncement(data.message);
+                    break;
+                case "chat_message":
+                    displayChatMessage(data.sender, data.message);
+                    break;
+            }
+             // Tự động cuộn xuống tin nhắn mới nhất
+            messages.scrollTop = messages.scrollHeight;
+        };
+
+        // Xử lý khi gửi form
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (input.value) {
+                const chatPayload = {
+                    type: "chat_message",
+                    message: input.value
+                };
+                socket.send(JSON.stringify(chatPayload));
+                input.value = '';
+            }
+        });
+
+        // --- Các hàm hiển thị ---
+        
+        function updateUserList(users) {
+            userList.innerHTML = ''; // Xóa danh sách cũ
+            users.sort().forEach(user => {
+                const item = document.createElement('li');
+                item.textContent = user;
+                userList.appendChild(item);
+            });
+        }
+        
+        function displayAnnouncement(message) {
+            const item = document.createElement('li');
+            item.className = 'announcement';
+            item.textContent = message;
+            messages.appendChild(item);
+        }
+
+        function displayChatMessage(sender, message) {
+            const item = document.createElement('li');
+            item.classList.add('message-item');
+
+            // Phân biệt tin nhắn của mình và của người khác
+            if (sender === username) {
+                item.classList.add('mine');
+                item.innerHTML = `<div class="message-content">${message}</div>`;
+            } else {
+                item.classList.add('other');
+                item.innerHTML = `<div class="message-sender">${sender}</div><div class="message-content">${message}</div>`;
+            }
+            messages.appendChild(item);
+        }
+    </script>
+</body>
+</html>
